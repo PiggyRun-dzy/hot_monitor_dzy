@@ -1,0 +1,22 @@
+{
+  "name": "hot-monitor",
+  "version": "1.0.0",
+  "description": "AI-powered hotspot monitoring tool with radar-style dashboard",
+  "type": "module",
+  "scripts": {
+    "dev": "node start.js",
+    "build": "cd client && npm run build",
+    "start": "node server/index.js",
+    "setup": "npm install && cd client && npm install"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.2",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.10.1",
+    "rss-parser": "^3.13.0",
+    "sql.js": "^1.14.1"
+  }
+}
