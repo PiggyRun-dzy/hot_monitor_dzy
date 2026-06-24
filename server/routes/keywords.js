@@ -35,14 +35,18 @@ export default function keywordRoutes(app) {
     res.status(201).json(newKeyword);
   });
 
-  // Update keyword status
+  // Update keyword (status, keyword, scope)
   app.patch('/api/keywords/:id', (req, res) => {
-    const { status } = req.body;
+    const { status, keyword, scope } = req.body;
     const db = getDb();
-    const stmt = db.prepare('UPDATE keywords SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
-    const info = stmt.run(status, req.params.id);
-    if (info.changes === 0) {
-      return res.status(404).json({ error: '关键词不存在' });
+    const existing = db.prepare('SELECT * FROM keywords WHERE id = ?').get(req.params.id);
+    if (!existing) return res.status(404).json({ error: '关键词不存在' });
+
+    if (status) {
+      db.prepare('UPDATE keywords SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, req.params.id);
+    }
+    if (keyword !== undefined && scope !== undefined) {
+      db.prepare('UPDATE keywords SET keyword = ?, scope = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(keyword.trim(), scope?.trim() || '', req.params.id);
     }
     res.json({ success: true });
   });

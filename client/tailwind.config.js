@@ -1,26 +1,21 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
+  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
       colors: {
-        'cyber': {
-          dark: '#0A0E27',
-          panel: '#0D1117',
-          border: '#1A1F3A',
-          cyan: '#00FFFF',
-          purple: '#7C3AED',
-          green: '#22C55E',
-          pink: '#FF006E',
-          amber: '#F59E0B',
+        space: {
+          darkest: '#06060B',
+          dark: '#0A0A14',
+          card: '#111118',
+          border: '#1E1E2E',
         },
-        'hud': {
-          line: '#1E2A4A',
-          text: '#E0E0E0',
-          dim: '#64748B',
+        accent: {
+          primary: '#6366F1',   // indigo
+          glow: '#818CF8',      // lighter indigo
+          success: '#34D399',   // emerald
+          alert: '#F472B6',     // pink
+          warm: '#FBBF24',      // amber
         }
       },
       fontFamily: {
@@ -28,44 +23,31 @@ export default {
         sans: ['Inter', 'system-ui', 'sans-serif'],
       },
       animation: {
-        'radar-spin': 'radar-spin 4s linear infinite',
-        'pulse-neon': 'pulse-neon 2s ease-in-out infinite',
-        'scan-line': 'scan-line 2s linear infinite',
-        'signal-pulse': 'signal-pulse 1.5s ease-out infinite',
-        'glow': 'glow 2s ease-in-out infinite alternate',
-        'slide-up': 'slide-up 0.4s ease-out',
-        'fade-in': 'fade-in 0.3s ease-out',
+        'fade-up': 'fadeUp 0.5s ease-out',
+        'fade-in': 'fadeIn 0.3s ease-out',
+        'pulse-glow': 'pulseGlow 2s ease-in-out infinite',
+        'shimmer': 'shimmer 2s linear infinite',
+        'border-glow': 'borderGlow 3s ease-in-out infinite',
+        'spotlight-left': 'spotlightLeft 2s ease 0.5s 1 forwards',
+        'beam-fade': 'beamFade 2.5s ease-out 0.4s 1 forwards',
+        'star-shoot': 'starShoot 0.6s ease-out 1 forwards',
       },
       keyframes: {
-        'radar-spin': {
-          '0%': { transform: 'rotate(0deg)' },
-          '100%': { transform: 'rotate(360deg)' }
-        },
-        'pulse-neon': {
-          '0%, 100%': { opacity: '1', boxShadow: '0 0 10px rgba(0,255,255,0.3)' },
-          '50%': { opacity: '0.7', boxShadow: '0 0 20px rgba(0,255,255,0.6)' }
-        },
-        'scan-line': {
-          '0%': { transform: 'translateY(-100%)' },
-          '100%': { transform: 'translateY(100%)' }
-        },
-        'signal-pulse': {
-          '0%': { transform: 'scale(0.8)', opacity: '1' },
-          '100%': { transform: 'scale(2)', opacity: '0' }
-        },
-        'glow': {
-          '0%': { textShadow: '0 0 4px rgba(0,255,255,0.5)' },
-          '100%': { textShadow: '0 0 12px rgba(0,255,255,0.9), 0 0 24px rgba(124,58,237,0.5)' }
-        },
-        'slide-up': {
-          '0%': { transform: 'translateY(20px)', opacity: '0' },
-          '100%': { transform: 'translateY(0)', opacity: '1' }
-        },
-        'fade-in': {
-          '0%': { opacity: '0' },
-          '100%': { opacity: '1' }
-        }
-      }
+        fadeUp: { '0%': { opacity: '0', transform: 'translateY(12px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+        fadeIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
+        pulseGlow: { '0%,100%': { boxShadow: '0 0 8px rgba(99,102,241,0.15)' }, '50%': { boxShadow: '0 0 20px rgba(99,102,241,0.35)' } },
+        shimmer: { '0%': { backgroundPosition: '200% 0' }, '100%': { backgroundPosition: '-200% 0' } },
+        borderGlow: { '0%,100%': { borderColor: 'rgba(99,102,241,0.3)' }, '50%': { borderColor: 'rgba(99,102,241,0.6)' } },
+        spotlightLeft: { '0%': { opacity: '0', transform: 'translateX(-15%) translateY(-55%) scale(0.5)' }, '100%': { opacity: '1', transform: 'translateX(5%) translateY(-45%) scale(1)' } },
+        beamFade: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
+        starShoot: { '0%': { transform: 'rotate(-25deg) translateY(-20px) translateX(-100%)', opacity: '0' }, '50%': { opacity: '1' }, '100%': { transform: 'rotate(-25deg) translateY(60px) translateX(100%)', opacity: '0' } },
+        starFall: { '0%': { transform: 'translateY(-100%)', opacity: '0' }, '10%': { opacity: '1' }, '90%': { opacity: '1' }, '100%': { transform: 'translateY(400%)', opacity: '0' } },
+      },
+      backgroundImage: {
+        'shimmer-gr': 'linear-gradient(90deg, transparent, rgba(99,102,241,0.08), transparent)',
+        'gradient-radial': 'radial-gradient(circle at 50% 0%, rgba(99,102,241,0.08) 0%, transparent 50%)',
+      },
+      backdropBlur: { xs: '2px' },
     },
   },
   plugins: [],
