@@ -22,3 +22,5 @@ Thumbs.db
 
 # Logs
 *.log
+server/hot-monitor.db
+nul
