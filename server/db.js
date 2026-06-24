@@ -66,11 +66,17 @@ function initTables() {
       source_name TEXT DEFAULT '',
       ai_verified INTEGER DEFAULT 0,
       relevance_score INTEGER DEFAULT 0,
+      importance INTEGER DEFAULT 0,
       is_fake INTEGER DEFAULT 0,
       detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       notified INTEGER DEFAULT 0
     )
   `);
+
+  // Migration: add importance column if upgrading from older schema
+  migrateAddColumn(rawDb, 'hotspots', 'importance', 'INTEGER DEFAULT 0');
+  // Migration: add freshness column
+  migrateAddColumn(rawDb, 'hotspots', 'freshness', 'INTEGER DEFAULT 0');
 
   rawDb.run(`
     CREATE TABLE IF NOT EXISTS monitor_logs (
@@ -92,7 +98,52 @@ function initTables() {
   rawDb.run('CREATE INDEX IF NOT EXISTS idx_hotspots_detected ON hotspots(detected_at)');
   rawDb.run('CREATE INDEX IF NOT EXISTS idx_keywords_status ON keywords(status)');
 
+  // Initialize default settings
+  initDefaultSettings(rawDb);
+
   saveDb();
+}
+
+/**
+ * Safely add a column if it doesn't exist (sql.js compatible migration).
+ */
+function migrateAddColumn(rawDb, table, column, type) {
+  try {
+    // Try to read from the column; if it fails, column doesn't exist
+    rawDb.run(`SELECT ${column} FROM ${table} LIMIT 1`);
+  } catch {
+    // Column doesn't exist — add it
+    rawDb.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    console.log(`[DB] Migration: added ${column} to ${table}`);
+  }
+}
+
+/**
+ * Insert default settings if not present.
+ */
+function initDefaultSettings(rawDb) {
+  const defaults = {
+    'scan_interval': '30',
+    'min_score_engine': '70',
+    'min_score_community': '55',
+    'max_age_days': '7'
+  };
+  for (const [key, value] of Object.entries(defaults)) {
+    try {
+      const stmt = rawDb.prepare('SELECT value FROM settings WHERE key = ?');
+      stmt.bind([key]);
+      if (!stmt.step()) {
+        const insertStmt = rawDb.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
+        insertStmt.bind([key, value]);
+        insertStmt.step();
+        insertStmt.free();
+        console.log(`[DB] Default setting: ${key} = ${value}`);
+      }
+      stmt.free();
+    } catch (e) {
+      console.error(`[DB] Error setting default ${key}:`, e.message);
+    }
+  }
 }
 
 /**

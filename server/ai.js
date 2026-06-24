@@ -7,10 +7,11 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 /**
  * Verify if a search result is genuinely about the keyword using AI.
  * Uses OpenRouter's response_format for structured JSON + response-healing plugin.
- * Returns: { isRelevant, isFake, score, summary }
+ * Returns: { isRelevant, isFake, score, importance, freshness, summary }
+ * Throws on failure (strict mode — no fallback acceptance).
  */
 export async function verifyContent(title, snippet, url, keyword, scope) {
-  const prompt = `分析以下搜索结果是否与监控关键词"${keyword}"真正相关。
+  const prompt = `分析以下搜索结果是否与监控关键词"${keyword}"真正相关、重要且有时效性。
 
 标题: ${title}
 摘要: ${snippet}
@@ -18,12 +19,24 @@ export async function verifyContent(title, snippet, url, keyword, scope) {
 监控范围: ${scope || '无特定范围'}
 
 判断标准：
-1. 是否与关键词"${keyword}"真正相关？（排除同名但不同含义、蹭热度、标题党）
-2. 是否为假冒/虚假内容？
-3. 给出相关性评分(0-100)
+1. 相关性(score, 0-100)：是否与关键词"${keyword}"真正相关？排除同名不同义、蹭热度、标题党。
+2. 重要性(importance, 0-100)：这条信息的新闻价值或讨论价值有多高？
+   - 90-100: 官方公告、重大突破、行业地震级新闻
+   - 70-89: 有实质内容的技术分析、深度报道、热门讨论
+   - 50-69: 一般性报道、常规讨论
+   - 30-49: 个人观点、碎碎念，信息量低
+   - 0-29: 完全无价值的灌水内容
+3. 时效性(freshness, 0-100)：这条信息是否够"新"？作为热点监控，过时的内容没有价值。
+   - 90-100: 今天/昨天刚发生，正在热传中
+   - 70-89: 近一周内，仍在讨论/发酵中
+   - 50-69: 近一月内，有一定参考价值
+   - 30-49: 数月前，已是旧闻
+   - 0-29: 半年以上，完全过时
+   （注意：官方文档/项目主页等长期页面，只要仍在更新/维护，freshness 可给 70-80）
+4. 真伪(isFake)：是否为假冒/虚假内容？
 
-返回JSON，字段名必须精确使用 isRelevant, isFake, score, summary：
-{"isRelevant":true/false,"isFake":true/false,"score":0-100,"summary":"一句话中文摘要"}`;
+返回JSON，字段名必须精确使用 isRelevant, isFake, score, importance, freshness, summary：
+{"isRelevant":true/false,"isFake":true/false,"score":0-100,"importance":0-100,"freshness":0-100,"summary":"一句话中文摘要"}`;
 
   try {
     const response = await fetch(OPENROUTER_URL, {
@@ -40,7 +53,7 @@ export async function verifyContent(title, snippet, url, keyword, scope) {
         // Force JSON output (OpenRouter v1 structured output)
         response_format: { type: 'json_object' },
         // DeepSeek V4 Pro is a reasoning model - need extra tokens for reasoning
-        max_tokens: 600,
+        max_tokens: 1000,
         temperature: 0.1
       })
     });
@@ -64,23 +77,22 @@ export async function verifyContent(title, snippet, url, keyword, scope) {
     const isRelevant = result.isRelevant ?? result.relevant ?? true;
     const isFake = result.isFake ?? result.fake ?? false;
     const score = Number(result.score ?? 50);
+    const importance = Number(result.importance ?? 50);
+    const freshness = Number(result.freshness ?? 50);
     const summary = result.summary ?? snippet?.slice(0, 50) ?? title;
 
     return {
       isRelevant: Boolean(isRelevant),
       isFake: Boolean(isFake),
       score: Math.min(100, Math.max(0, score)),
+      importance: Math.min(100, Math.max(0, importance)),
+      freshness: Math.min(100, Math.max(0, freshness)),
       summary: String(summary).slice(0, 50)
     };
   } catch (error) {
-    console.error('AI verification failed:', error.message);
-    // Fallback: accept content but mark with moderate score
-    return {
-      isRelevant: true,
-      isFake: false,
-      score: 65,
-      summary: snippet ? snippet.slice(0, 50) : title
-    };
+    console.error('[AI] Verification failed for:', title, '|', error.message);
+    // Strict mode: throw instead of silently accepting unverified content
+    throw error;
   }
 }
 

@@ -45,7 +45,22 @@ export default function App() {
   };
   const toggleKw = (id, s) => api(`/api/keywords/${id}`, { method: 'PATCH', body: JSON.stringify({ status: s === 'active' ? 'paused' : 'active' }) }).then(loadAll);
   const delKw = async id => { if (confirm('删除？')) { await api(`/api/keywords/${id}`, { method: 'DELETE' }); loadAll(); } };
-  const scanAll = async () => { setScanning(true); try { await api('/api/hotspots/new'); loadAll(); } catch { } setScanning(false); };
+  const scanAll = async () => {
+    setScanning(true);
+    try {
+      // Get lastScan before triggering
+      const before = await api('/api/stats');
+      await api('/api/scan', { method: 'POST' });
+      // Poll until scan completes (max 120s)
+      for (let i = 0; i < 24; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const st = await api('/api/stats');
+        if (st.lastScan !== before.lastScan) break; // scan completed
+      }
+    } catch { }
+    loadAll();
+    setScanning(false);
+  };
   const updateKw = (id, kw, scope) => api(`/api/keywords/${id}`, { method: 'PATCH', body: JSON.stringify({ keyword: kw, scope }) }).then(loadAll);
 
   const newCount = stats.recent24h || 0;

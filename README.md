@@ -1,6 +1,6 @@
 # 📡 Hot Monitor — AI 热点雷达监测站
 
-> AI 驱动的热点监控工具，7 大免费数据源 × DeepSeek V4 Pro AI 验证，帮你走在吃瓜第一线。
+> AI 驱动的热点监控工具，12 大免费数据源 × DeepSeek V4 Pro 三维 AI 验证，帮你走在吃瓜第一线。
 
 <p align="center">
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react" alt="React">
@@ -16,9 +16,11 @@
 ## ✨ 功能
 
 - **🎯 关键词监控** — 输入关键词，自动追踪热点，滑块开关 + 编辑/删除
-- **🤖 AI 真伪识别** — DeepSeek V4 Pro 验证真伪，排除标题党
-- **🌐 7 大免费数据源** — Bing/Google/DDG/搜狗/HackerNews/B站/微博热搜
-- **⏰ 定时扫描** — 每 30 分钟自动，支持手动触发
+- **🤖 AI 三维验证** — DeepSeek V4 Pro 评估 相关性(R) + 重要性(I) + 时效性(F)，排除标题党和旧闻
+- **🌐 12 大免费数据源** — Bing/Google/DDG/搜狗/百度/HN/B站/微博/GitHub/掘金/知乎/Reddit
+- **🛡️ 三层质量过滤** — 互动量预过滤 → 时效预过滤(>7天丢弃) → AI 三维评分
+- **🔍 账号检测** — GitHub/B站/知乎自动识别博主/官方账号，提取粉丝数等信息
+- **⏰ 定时扫描** — 每 30 分钟自动，支持手动触发（轮询等待完成）
 - **📡 三 Tab 布局** — 热点流（首页）/ 监控词 / 搜索历史
 - **✨ Aceternity 动效** — 光束聚光灯、流星效果、玻璃拟态卡片
 - **📊 统计卡片** — 关键词/热点/24h/AI验证，透明玻璃风格
@@ -142,17 +144,32 @@ wmic process where processid=12345 delete
 | **Google** | 国际搜索 | ❌ | Cheerio 爬虫 |
 | **DuckDuckGo** | 隐私搜索 | ❌ | Lite HTML 解析 |
 | **搜狗** | 中文搜索 | ❌ | Cheerio 爬虫 |
+| **百度** | 中文搜索 | ❌ | Cheerio 爬虫 |
 | **HackerNews** | 科技社区 | ❌ | Algolia API |
-| **B站** | 视频平台 | ❌ | 官方 API |
+| **B站** | 视频平台 | ❌ | 官方 API + UP主信息检测 |
 | **微博热搜** | 实时热搜 | ❌ | Ajax API |
+| **GitHub** | 开发者社区 | ❌ | 官方 API（仓库+用户+组织检测） |
+| **掘金** | 开发者社区 | ❌ | 官方 API |
+| **知乎** | 问答社区 | ❌ | 网页爬虫 |
+| **Reddit** | 国际社区 | ❌ | .json API |
 
-> 全部免费，开箱即用，`searchAll` 自动聚合去重。
+> 全部免费，开箱即用，`searchAll` 轮询聚合去重。
+
+---
+
+## 🛡️ 三层质量过滤
+
+| 层级 | 说明 | 示例阈值 |
+|:---:|------|------|
+| L1 互动量 | 源特定互动量门槛 | HN ≥10赞+5评论, B站 ≥500播放, GitHub ≥10 Stars, 微博 ≥10万热度 |
+| L2 时效 | `pub_date` 超过 `max_age_days` 直接丢弃 | 默认 7 天，可配 3-30 天 |
+| L3 AI 三维 | R+I+F 综合分 ≥ 来源阈值；F<40 硬拒绝 | 引擎源≥70, 社区源≥55 |
 
 ---
 
 ## 🎨 界面
 
-**深空玻璃风格** — 暗色背景 `#05050A` + 玻璃拟态卡片（`backdrop-blur: 24px`），光束聚光灯贯穿全页，随机流星动画点缀统计卡片。
+**深空玻璃风格** — 暗色背景 `#05050A` + 玻璃拟态卡片（`backdrop-blur: 24px`），光束聚光灯贯穿全页，随机流星动画点缀统计卡片。每张热点卡片展示 SVG 环形综合评分 + R:I:F 三维指标。
 
 ---
 
@@ -162,18 +179,20 @@ wmic process where processid=12345 delete
 hot-monitor/
 ├── server/                 # 后端 Express
 │   ├── index.js            # 服务入口
-│   ├── db.js               # SQLite (sql.js)
-│   ├── ai.js               # DeepSeek V4 Pro AI
-│   ├── monitor.js          # 监控引擎
+│   ├── db.js               # SQLite (sql.js) + 自动迁移
+│   ├── ai.js               # DeepSeek V4 Pro AI (R+I+F 三维)
+│   ├── monitor.js          # 监控引擎（三层过滤）
 │   ├── scheduler.js        # 定时任务
 │   ├── notifier.js         # 邮件通知
 │   ├── search/
-│   │   └── web-scraper.js  # 7 大数据源爬虫
+│   │   └── web-scraper.js  # 12 大数据源 + 账号检测
 │   └── routes/             # API 路由
 ├── client/                 # 前端 React + Vite
 │   └── src/components/     # 7 个 UI 组件
 ├── start.js                # 一键启动脚本
-├── docs/DESIGN.md          # 详细设计文档
+├── docs/
+│   ├── DESIGN.md           # 方案设计文档
+│   └── REQUIREMENTS.md     # 需求文档
 └── .env.example            # 配置模板
 ```
 
@@ -189,11 +208,14 @@ hot-monitor/
 
 ---
 
-## 📖 更多文档
+## 📖 文档
 
-- [完整设计文档](docs/DESIGN.md) — 架构设计、数据模型、API 接口
-- [OpenRouter 文档](https://openrouter.ai/docs) — AI 服务对接
-- [sql.js 文档](https://github.com/sql-js/sql.js) — 数据库引擎
+| 文档 | 内容 |
+|------|------|
+| [需求文档](docs/REQUIREMENTS.md) | 项目背景、用户角色、功能需求、非功能需求 |
+| [方案设计](docs/DESIGN.md) | 技术选型、系统架构、数据模型、API、核心模块、填坑记录 |
+| [OpenRouter 文档](https://openrouter.ai/docs) | AI 服务对接 |
+| [sql.js 文档](https://github.com/sql-js/sql.js) | 数据库引擎
 
 ---
 

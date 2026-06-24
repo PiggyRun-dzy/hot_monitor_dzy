@@ -18,7 +18,8 @@ export default function hotspotRoutes(app) {
     }
 
     const hotspots = db.prepare(`
-      SELECT h.*, k.keyword, k.scope
+      SELECT h.*, k.keyword, k.scope,
+        CAST((h.relevance_score + h.importance + COALESCE(h.freshness, 50)) / 3 AS INTEGER) as combined_score
       FROM hotspots h
       JOIN keywords k ON h.keyword_id = k.id
       ${whereClause}
@@ -45,11 +46,12 @@ export default function hotspotRoutes(app) {
     const sinceDate = since || new Date(Date.now() - 24 * 3600 * 1000).toISOString();
 
     const hotspots = db.prepare(`
-      SELECT h.*, k.keyword, k.scope
+      SELECT h.*, k.keyword, k.scope,
+        CAST((h.relevance_score + h.importance + COALESCE(h.freshness, 50)) / 3 AS INTEGER) as combined_score
       FROM hotspots h
       JOIN keywords k ON h.keyword_id = k.id
       WHERE h.detected_at > ? AND h.notified = 0
-      ORDER BY h.relevance_score DESC, h.detected_at DESC
+      ORDER BY combined_score DESC, h.detected_at DESC
       LIMIT 30
     `).all(sinceDate);
 
@@ -103,6 +105,37 @@ export default function hotspotRoutes(app) {
       verified: verified.count,
       lastScan: lastScan?.created_at || null
     });
+  });
+
+  // Trigger a full monitor scan for all active keywords
+  app.post('/api/scan', async (_req, res) => {
+    const db = getDb();
+    res.json({ message: '全量扫描已触发，请等待结果...' });
+    // Run async — don't block response
+    try {
+      const { runMonitorCycle } = await import('../monitor.js');
+      const result = await runMonitorCycle(db);
+      console.log(`[Manual Scan] Complete: ${result.newHotspots.length} new hotspots`);
+    } catch (error) {
+      console.error('[Manual Scan] Error:', error.message);
+    }
+  });
+
+  // Debug: test individual search sources
+  app.get('/api/debug/search', async (req, res) => {
+    const { keyword = 'TDesign' } = req.query;
+    const {
+      searchBaidu, searchGitHub, searchJuejin, searchZhihu, searchReddit
+    } = await import('../search/web-scraper.js');
+
+    const results = {};
+    try { results.baidu = await searchBaidu(keyword, 2); } catch (e) { results.baidu = { error: e.message }; }
+    try { results.github = await searchGitHub(keyword, 2); } catch (e) { results.github = { error: e.message }; }
+    try { results.juejin = await searchJuejin(keyword, 2); } catch (e) { results.juejin = { error: e.message }; }
+    try { results.zhihu = await searchZhihu(keyword, 2); } catch (e) { results.zhihu = { error: e.message }; }
+    try { results.reddit = await searchReddit(keyword, 2); } catch (e) { results.reddit = { error: e.message }; }
+
+    res.json({ keyword, results });
   });
 
   // Get recent logs
