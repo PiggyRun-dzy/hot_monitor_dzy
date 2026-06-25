@@ -14,7 +14,7 @@ export default function KeywordManager({ keywords, onAdd, onToggle, onDelete, on
         <button onClick={onAdd} className="neo-btn neo-btn-primary text-xs py-1.5 px-3">+ 添加</button>
       </div>
 
-      <div className="space-y-0.5 max-h-[520px] overflow-y-auto custom-scroll pr-0.5">
+      <div className="space-y-0.5 pr-0.5">
         {keywords.length === 0 ? (
           <div className="text-center py-10 text-zinc-600">
             <p className="text-2xl mb-1.5">📡</p>

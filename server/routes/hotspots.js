@@ -2,28 +2,124 @@ import dbModule from '../db.js';
 const { getDb } = dbModule;
 import { generateBatchSummary } from '../ai.js';
 
+// Source classification
+const ENGINE_SOURCES = ['bing', 'google', 'ddg', 'sogou', 'baidu'];
+const COMMUNITY_SOURCES = ['hackernews', 'bilibili', 'weibo', 'github', 'juejin', 'zhihu', 'reddit'];
+const ALL_SOURCES = [...ENGINE_SOURCES, ...COMMUNITY_SOURCES];
+
 export default function hotspotRoutes(app) {
-  // Get hotspots with pagination and filters
+  // Get hotspots with pagination, sorting, and filters
   app.get('/api/hotspots', (req, res) => {
     const db = getDb();
-    const { page = 1, limit = 20, status = 'all' } = req.query;
+    const {
+      page = 1, limit = 20,
+      // Sort
+      sort = 'detected_at', order = 'desc',
+      // Filters
+      status = 'all', source, source_type, keyword_id,
+      time, score_min, score_max,
+      r_min, r_max, i_min, i_max, f_min, f_max,
+      ai_verified
+    } = req.query;
+
     const offset = (page - 1) * limit;
 
-    let whereClause = '';
+    // Build WHERE conditions
+    const conditions = [];
     const params = [];
-    if (status === 'notified') {
-      whereClause = 'WHERE h.notified = 1';
-    } else if (status === 'unread') {
-      whereClause = 'WHERE h.notified = 0';
+
+    // Source filter: comma-separated source identifiers
+    if (source) {
+      const sources = source.split(',').map(s => s.trim()).filter(Boolean);
+      if (sources.length > 0) {
+        conditions.push(`h.source IN (${sources.map(() => '?').join(',')})`);
+        params.push(...sources);
+      }
     }
+
+    // Source type filter: engine | community
+    if (source_type === 'engine') {
+      conditions.push(`h.source IN (${ENGINE_SOURCES.map(() => '?').join(',')})`);
+      params.push(...ENGINE_SOURCES);
+    } else if (source_type === 'community') {
+      conditions.push(`h.source IN (${COMMUNITY_SOURCES.map(() => '?').join(',')})`);
+      params.push(...COMMUNITY_SOURCES);
+    }
+
+    // Keyword filter: comma-separated keyword IDs
+    if (keyword_id) {
+      const ids = keyword_id.split(',').map(s => Number(s.trim())).filter(Boolean);
+      if (ids.length > 0) {
+        conditions.push(`h.keyword_id IN (${ids.map(() => '?').join(',')})`);
+        params.push(...ids);
+      }
+    }
+
+    // Time range filter
+    if (time === '1h') {
+      conditions.push("h.detected_at > datetime('now', '-1 hours')");
+    } else if (time === '24h') {
+      conditions.push("h.detected_at > datetime('now', '-24 hours')");
+    } else if (time === '7d') {
+      conditions.push("h.detected_at > datetime('now', '-7 days')");
+    } else if (time === '30d') {
+      conditions.push("h.detected_at > datetime('now', '-30 days')");
+    }
+
+    // Combined score range
+    const combinedExpr = "CAST((h.relevance_score + h.importance + COALESCE(h.freshness, 50)) / 3 AS INTEGER)";
+    if (score_min !== undefined && score_min !== '') {
+      conditions.push(`${combinedExpr} >= ?`);
+      params.push(Number(score_min));
+    }
+    if (score_max !== undefined && score_max !== '') {
+      conditions.push(`${combinedExpr} <= ?`);
+      params.push(Number(score_max));
+    }
+
+    // R/I/F range filters
+    if (r_min !== undefined && r_min !== '') { conditions.push('h.relevance_score >= ?'); params.push(Number(r_min)); }
+    if (r_max !== undefined && r_max !== '') { conditions.push('h.relevance_score <= ?'); params.push(Number(r_max)); }
+    if (i_min !== undefined && i_min !== '') { conditions.push('h.importance >= ?'); params.push(Number(i_min)); }
+    if (i_max !== undefined && i_max !== '') { conditions.push('h.importance <= ?'); params.push(Number(i_max)); }
+    if (f_min !== undefined && f_min !== '') { conditions.push('h.freshness >= ?'); params.push(Number(f_min)); }
+    if (f_max !== undefined && f_max !== '') { conditions.push('h.freshness <= ?'); params.push(Number(f_max)); }
+
+    // AI verified filter
+    if (ai_verified === '1') {
+      conditions.push('h.ai_verified = 1');
+    } else if (ai_verified === '0') {
+      conditions.push('h.ai_verified = 0');
+    }
+
+    // Notified filter (via status param - backward compatible)
+    if (status === 'notified') {
+      conditions.push('h.notified = 1');
+    } else if (status === 'unread') {
+      conditions.push('h.notified = 0');
+    }
+
+    const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+
+    // Build ORDER BY (whitelist to prevent SQL injection)
+    const allowedSorts = {
+      combined_score: combinedExpr,
+      detected_at: 'h.detected_at',
+      relevance_score: 'h.relevance_score',
+      importance: 'h.importance',
+      freshness: 'h.freshness',
+      source: 'h.source_name'
+    };
+    const sortField = allowedSorts[sort] || 'h.detected_at';
+    const sortDir = order === 'asc' ? 'ASC' : 'DESC';
 
     const hotspots = db.prepare(`
       SELECT h.*, k.keyword, k.scope,
-        CAST((h.relevance_score + h.importance + COALESCE(h.freshness, 50)) / 3 AS INTEGER) as combined_score
+        ${combinedExpr} as combined_score
       FROM hotspots h
       JOIN keywords k ON h.keyword_id = k.id
       ${whereClause}
-      ORDER BY h.detected_at DESC
+      ORDER BY ${sortField} ${sortDir}, h.detected_at DESC
       LIMIT ? OFFSET ?
     `).all(...params, limit, offset);
 

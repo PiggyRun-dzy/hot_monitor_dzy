@@ -35,8 +35,10 @@ export async function verifyContent(title, snippet, url, keyword, scope) {
    （注意：官方文档/项目主页等长期页面，只要仍在更新/维护，freshness 可给 70-80）
 4. 真伪(isFake)：是否为假冒/虚假内容？
 
-返回JSON，字段名必须精确使用 isRelevant, isFake, score, importance, freshness, summary：
-{"isRelevant":true/false,"isFake":true/false,"score":0-100,"importance":0-100,"freshness":0-100,"summary":"一句话中文摘要"}`;
+5. 判断理由(reason)：用20-40字简述为何给出此相关性评分（如"标题直接提到GPT-5，且来自OpenAI官方仓库"或"虽然提到了AI但与关键词语义无关"）。
+
+返回JSON，字段名必须精确使用 isRelevant, isFake, score, importance, freshness, summary, reason：
+{"isRelevant":true/false,"isFake":true/false,"score":0-100,"importance":0-100,"freshness":0-100,"summary":"一句话中文摘要","reason":"20-40字判断理由"}`;
 
   try {
     const response = await fetch(OPENROUTER_URL, {
@@ -80,6 +82,7 @@ export async function verifyContent(title, snippet, url, keyword, scope) {
     const importance = Number(result.importance ?? 50);
     const freshness = Number(result.freshness ?? 50);
     const summary = result.summary ?? snippet?.slice(0, 50) ?? title;
+    const reason = result.reason ?? '';
 
     return {
       isRelevant: Boolean(isRelevant),
@@ -87,7 +90,8 @@ export async function verifyContent(title, snippet, url, keyword, scope) {
       score: Math.min(100, Math.max(0, score)),
       importance: Math.min(100, Math.max(0, importance)),
       freshness: Math.min(100, Math.max(0, freshness)),
-      summary: String(summary).slice(0, 50)
+      summary: String(summary).slice(0, 120),
+      reason: String(reason).slice(0, 80)
     };
   } catch (error) {
     console.error('[AI] Verification failed for:', title, '|', error.message);

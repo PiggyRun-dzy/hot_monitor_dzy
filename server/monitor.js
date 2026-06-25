@@ -47,6 +47,44 @@ const ENGINE_SOURCES = new Set(['bing', 'google', 'ddg', 'sogou', 'weibo', 'baid
 const COMMUNITY_SOURCES = new Set(['hackernews', 'bilibili', 'weibo_hot', 'github', 'juejin', 'reddit']);
 
 /**
+ * Build engagement JSON from search result based on source type.
+ */
+function buildEngagement(result) {
+  const e = {};
+  const s = result.source;
+  if (s === 'hackernews') {
+    if (result.points) e.points = result.points;
+    if (result.num_comments) e.num_comments = result.num_comments;
+  } else if (s === 'bilibili') {
+    if (result.play) e.play = result.play;
+    if (result.danmaku) e.danmaku = result.danmaku;
+  } else if (s === 'weibo_hot') {
+    if (result.hotness) e.hotness = result.hotness;
+  } else if (s === 'github') {
+    if (result.isAccount) {
+      if (result.followers) e.followers = result.followers;
+      if (result.public_repos) e.public_repos = result.public_repos;
+    } else {
+      if (result.stars) e.stars = result.stars;
+      if (result.forks) e.forks = result.forks;
+    }
+    if (result.language) e.language = result.language;
+    if (result.owner) e.owner = result.owner;
+  } else if (s === 'juejin') {
+    if (result.digg_count) e.digg_count = result.digg_count;
+    if (result.comment_count) e.comment_count = result.comment_count;
+    if (result.view_count) e.view_count = result.view_count;
+  } else if (s === 'zhihu') {
+    if (result.votes) e.votes = result.votes;
+  } else if (s === 'reddit') {
+    if (result.score) e.score = result.score;
+    if (result.num_comments) e.num_comments = result.num_comments;
+    if (result.subreddit) e.subreddit = result.subreddit;
+  }
+  return e;
+}
+
+/**
  * Get source category for threshold selection.
  */
 function getSourceCategory(source) {
@@ -141,7 +179,7 @@ export async function monitorKeyword(keywordObj, db) {
     return [];
   }
 
-  // Step 3: AI verification (strict mode — failures skip the result)
+  // Step 4: AI verification (strict mode — failures skip the result)
   const newHotspots = [];
   for (const result of passed) {
     try {
@@ -177,11 +215,17 @@ export async function monitorKeyword(keywordObj, db) {
         continue;
       }
 
+      const engagement = buildEngagement(result);
       const stmt = db.prepare(`
-        INSERT INTO hotspots (keyword_id, title, url, summary, source, source_name, ai_verified, relevance_score, importance, freshness, is_fake)
-        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 0)
+        INSERT INTO hotspots (keyword_id, title, url, summary, source, source_name, ai_verified, relevance_score, importance, freshness, is_fake, pub_date, original_snippet, author, engagement, ai_reason)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 0, ?, ?, ?, ?, ?)
       `);
-      const info = stmt.run(id, result.title, result.url, ai.summary, result.source, result.source_name, ai.score, ai.importance, ai.freshness);
+      const info = stmt.run(
+        id, result.title, result.url, ai.summary, result.source, result.source_name,
+        ai.score, ai.importance, ai.freshness,
+        result.pub_date || '', result.snippet || '', result.author || '',
+        JSON.stringify(engagement), ai.reason || ''
+      );
       newHotspots.push({
         id: info.lastInsertRowid,
         keyword_id: id,
@@ -193,7 +237,12 @@ export async function monitorKeyword(keywordObj, db) {
         source_name: result.source_name,
         score: ai.score,
         importance: ai.importance,
-        freshness: ai.freshness
+        freshness: ai.freshness,
+        pub_date: result.pub_date || '',
+        original_snippet: result.snippet || '',
+        author: result.author || '',
+        engagement,
+        ai_reason: ai.reason || ''
       });
       console.log(`  [AI Pass] score=${ai.score} imp=${ai.importance} fresh=${ai.freshness} combined=${combinedScore} src=${result.source}: "${result.title?.slice(0, 40)}"`);
     } catch (error) {

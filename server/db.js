@@ -77,6 +77,12 @@ function initTables() {
   migrateAddColumn(rawDb, 'hotspots', 'importance', 'INTEGER DEFAULT 0');
   // Migration: add freshness column
   migrateAddColumn(rawDb, 'hotspots', 'freshness', 'INTEGER DEFAULT 0');
+  // Migration: add engagement data columns (v1.4)
+  migrateAddColumn(rawDb, 'hotspots', 'pub_date', "TEXT DEFAULT ''");
+  migrateAddColumn(rawDb, 'hotspots', 'original_snippet', "TEXT DEFAULT ''");
+  migrateAddColumn(rawDb, 'hotspots', 'author', "TEXT DEFAULT ''");
+  migrateAddColumn(rawDb, 'hotspots', 'engagement', "TEXT DEFAULT '{}'");
+  migrateAddColumn(rawDb, 'hotspots', 'ai_reason', "TEXT DEFAULT ''");
 
   rawDb.run(`
     CREATE TABLE IF NOT EXISTS monitor_logs (

@@ -44,7 +44,7 @@ export async function searchBing(keyword, maxResults = 3) {
       const a = $(el).find('h2 a');
       const title = a.text().trim();
       const href = a.attr('href') || '';
-      const snippet = ($(el).find('.b_caption p').first().text() || $(el).find('.b_lineclamp2').text()).trim();
+      const snippet = $(el).find('.b_caption p').map((_, p) => $(p).text().trim()).get().filter(Boolean).join(' ') || $(el).find('.b_lineclamp2').text().trim();
       if (title && href) results.push({ title, url: href, snippet, source: 'bing', source_name: 'Bing' });
     });
     return results;
@@ -104,7 +104,7 @@ export async function searchSogou(keyword, maxResults = 3) {
       const a = $(el).find('h3 a, .vr-title a');
       const title = a.text().trim();
       const href = a.attr('href') || '';
-      const snippet = $(el).find('.star-wiki, .str-text, .space-txt').text().trim();
+      const snippet = $(el).find('.star-wiki, .str-text, .space-txt, .abstract').text().trim();
       if (title && href) results.push({ title, url: href, snippet, source: 'sogou', source_name: '搜狗搜索' });
     });
     return results;
@@ -126,7 +126,7 @@ export async function searchHackerNews(keyword, maxResults = 3) {
     return (data.hits || []).slice(0, maxResults).map(h => ({
       title: h.title,
       url: h.url || `https://news.ycombinator.com/item?id=${h.objectID}`,
-      snippet: `${h.points} points | ${h.num_comments} comments`,
+      snippet: (h.story_text || h.comment_text || '').slice(0, 300) || `${h.points} points | ${h.num_comments} comments`,
       source: 'hackernews',
       source_name: 'HackerNews',
       points: h.points || 0,
@@ -158,7 +158,7 @@ export async function searchBilibili(keyword, maxResults = 3) {
     return (data.data?.result || []).slice(0, maxResults).map(v => ({
       title: String(v.title || '').replace(/<[^>]+>/g, ''),
       url: `https://www.bilibili.com/video/${v.bvid}`,
-      snippet: `${v.play || 0}播放 | ${v.danmaku || 0}弹幕 | UP: ${v.author}`,
+      snippet: (v.description || '').slice(0, 200) || `${v.play || 0}播放 | ${v.danmaku || 0}弹幕 | UP: ${v.author}`,
       source: 'bilibili',
       source_name: 'B站',
       play: v.play || 0,
@@ -191,7 +191,8 @@ export async function searchWeibo(keyword, maxResults = 3) {
       const title = $(el).find('.txt').text().trim() || a.text().trim();
       const href = a.attr('href') || '';
       const url = href.startsWith('//') ? 'https:' + href : href;
-      if (title && url) results.push({ title, url, snippet: '', source: 'weibo', source_name: '微博' });
+      const weiboSnippet = $(el).find('.txt').text().trim().slice(0, 200);
+      if (title && url) results.push({ title, url, snippet: weiboSnippet, source: 'weibo', source_name: '微博' });
     });
     // Fallback: try card-feed
     if (!results.length) {
@@ -201,7 +202,8 @@ export async function searchWeibo(keyword, maxResults = 3) {
         const title = $(el).find('p').text().trim().slice(0, 80);
         const href = a.attr('href') || '';
         const url = href.startsWith('//') ? 'https:' + href : href;
-        if (title && url) results.push({ title, url, snippet: '', source: 'weibo', source_name: '微博' });
+        const weiboSnippet = $(el).find('.txt').text().trim().slice(0, 200);
+      if (title && url) results.push({ title, url, snippet: weiboSnippet, source: 'weibo', source_name: '微博' });
       });
     }
     return results;
@@ -249,7 +251,7 @@ export async function searchBaidu(keyword, maxResults = 3) {
       const a = $(el).find('h3 a').first();
       const title = a.text().trim();
       const href = a.attr('href') || '';
-      const snippet = $(el).find('.c-abstract, .c-span-last, .content-right_8Zs40').first().text().trim();
+      const snippet = $(el).find('.c-abstract, .c-span-last, .content-right_8Zs40').map((_, p) => $(p).text().trim()).get().filter(Boolean).join(' ');
       if (title && href) results.push({ title, url: href, snippet, source: 'baidu', source_name: '百度' });
     });
     return results;
@@ -353,7 +355,7 @@ export async function searchJuejin(keyword, maxResults = 3) {
       return {
         title: String(info.title || info.article_title || '').replace(/<[^>]+>/g, ''),
         url: `https://juejin.cn/post/${info.article_id || item.article_id || ''}`,
-        snippet: `👍 ${info.digg_count || 0} | 💬 ${info.comment_count || 0} | 👀 ${info.view_count || 0}`,
+        snippet: (info.brief_content || '').slice(0, 200) || `👍 ${info.digg_count || 0} | 💬 ${info.comment_count || 0} | 👀 ${info.view_count || 0}`,
         source: 'juejin',
         source_name: '掘金',
         digg_count: info.digg_count || 0,
@@ -433,7 +435,7 @@ export async function searchReddit(keyword, maxResults = 3) {
       return {
         title: d.title || '',
         url: `https://www.reddit.com${d.permalink}`,
-        snippet: `⬆ ${d.score} | 💬 ${d.num_comments} | r/${d.subreddit}`,
+        snippet: (d.selftext || '').slice(0, 250) || `⬆ ${d.score} | 💬 ${d.num_comments} | r/${d.subreddit}`,
         source: 'reddit',
         source_name: 'Reddit',
         score: d.score || 0,

@@ -15,6 +15,13 @@ const TABS = [
   { key: 'search',   label: '搜索',   icon: '🔍' },
 ];
 
+const DEFAULT_FILTERS = {
+  time: 'all', sources: [], keywordIds: [],
+  scoreMin: '', scoreMax: '',
+  rMin: '', rMax: '', iMin: '', iMax: '', fMin: '', fMax: '',
+  aiVerified: 'all', sourceType: 'all', notified: 'all'
+};
+
 export default function App() {
   const [keywords, setKeywords] = useState([]);
   const [hotspots, setHotspots] = useState([]);
@@ -23,18 +30,52 @@ export default function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [sortField, setSortField] = useState('detected_at');
+  const [sortOrder, setSortOrder] = useState('desc');
+  const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
 
   const api = useCallback((path, opts) =>
     fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts }).then(r => r.json()), []);
 
+  const buildHotspotUrl = useCallback(() => {
+    const params = new URLSearchParams();
+    params.set('limit', '20');
+    params.set('page', String(page));
+    params.set('sort', sortField);
+    params.set('order', sortOrder);
+    if (filters.time && filters.time !== 'all') params.set('time', filters.time);
+    if (filters.sources?.length > 0) params.set('source', filters.sources.join(','));
+    if (filters.keywordIds?.length > 0) params.set('keyword_id', filters.keywordIds.join(','));
+    if (filters.scoreMin !== '') params.set('score_min', filters.scoreMin);
+    if (filters.scoreMax !== '') params.set('score_max', filters.scoreMax);
+    if (filters.rMin !== '') params.set('r_min', filters.rMin);
+    if (filters.rMax !== '') params.set('r_max', filters.rMax);
+    if (filters.iMin !== '') params.set('i_min', filters.iMin);
+    if (filters.iMax !== '') params.set('i_max', filters.iMax);
+    if (filters.fMin !== '') params.set('f_min', filters.fMin);
+    if (filters.fMax !== '') params.set('f_max', filters.fMax);
+    if (filters.aiVerified !== 'all') params.set('ai_verified', filters.aiVerified);
+    if (filters.sourceType !== 'all') params.set('source_type', filters.sourceType);
+    if (filters.notified !== 'all') params.set('status', filters.notified === '1' ? 'notified' : 'unread');
+    return `/api/hotspots?${params.toString()}`;
+  }, [sortField, sortOrder, filters, page]);
+
   const loadAll = useCallback(async () => {
     try {
+      const url = buildHotspotUrl();
       const [kws, hs, st] = await Promise.all([
-        api('/api/keywords'), api('/api/hotspots?limit=50'), api('/api/stats')
+        api('/api/keywords'), api(url), api('/api/stats')
       ]);
-      setKeywords(kws || []); setHotspots(hs?.data || []); setStats(st || {});
+      setKeywords(kws || []); setHotspots(hs?.data || []);
+      setTotalPages(hs?.totalPages || 1);
+      setTotalCount(hs?.total || 0);
+      setStats(st || {});
     } catch { /* ignore */ }
-  }, [api]);
+  }, [api, buildHotspotUrl]);
 
   useEffect(() => { loadAll(); const t = setInterval(loadAll, 15000); return () => clearInterval(t); }, [loadAll]);
 
@@ -62,6 +103,9 @@ export default function App() {
     setScanning(false);
   };
   const updateKw = (id, kw, scope) => api(`/api/keywords/${id}`, { method: 'PATCH', body: JSON.stringify({ keyword: kw, scope }) }).then(loadAll);
+
+  const handleFilterChange = (next) => { setFilters(next); setPage(1); };
+  const handleSortChange = (field, order) => { setSortField(field); setSortOrder(order); setPage(1); };
 
   const newCount = stats.recent24h || 0;
 
@@ -124,13 +168,26 @@ export default function App() {
           {/* Tab content */}
           <div className="relative z-20 mt-4">
             {tab === 'feed' && (
-              <HotspotFeed hotspots={hotspots} />
+              <HotspotFeed
+                hotspots={hotspots}
+                keywords={keywords}
+                sortField={sortField}
+                sortOrder={sortOrder}
+                filters={filters}
+                page={page}
+                totalPages={totalPages}
+                totalCount={totalCount}
+                loading={loading}
+                onSortChange={handleSortChange}
+                onFilterChange={handleFilterChange}
+                onPageChange={setPage}
+              />
             )}
             {tab === 'keywords' && (
               <KeywordManager keywords={keywords} onAdd={() => setShowAdd(true)} onToggle={toggleKw} onDelete={delKw} onUpdate={updateKw} />
             )}
             {tab === 'search' && (
-              <SearchPanel api={api} />
+              <SearchPanel api={api} keywords={keywords} />
             )}
           </div>
         </main>
