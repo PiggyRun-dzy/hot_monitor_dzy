@@ -1,5 +1,5 @@
 import { searchAll } from './search/web-scraper.js';
-import { verifyContent } from './ai.js';
+import { verifyContent, expandQuery } from './ai.js';
 
 // ==================== Engagement thresholds ====================
 const ENGAGEMENT_RULES = [
@@ -45,6 +45,89 @@ const ENGAGEMENT_RULES = [
 // Search engines: no engagement data, rely purely on AI
 const ENGINE_SOURCES = new Set(['bing', 'google', 'ddg', 'sogou', 'weibo', 'baidu', 'zhihu']);
 const COMMUNITY_SOURCES = new Set(['hackernews', 'bilibili', 'weibo_hot', 'github', 'juejin', 'reddit']);
+
+// Tracking params to strip from URLs before dedup
+const TRACKING_PARAMS = new Set([
+  'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
+  'fbclid', 'gclid', 'ref', 'source', 'from', 'spm', 'scm',
+  'tracking', 'track', 'session_id', 'vd_source',
+  '_ga', '_gl', 'mc_cid', 'mc_eid', 'pk_campaign', 'pk_kwd',
+  'igshid', 'wd', 'eqid', 'rsv_spt', 'rsv_iqid'
+]);
+
+/**
+ * Normalize URL for dedup comparison: strip tracking params, decode redirects,
+ * lowercase scheme+host, remove trailing slash, remove www.
+ */
+function normalizeUrl(rawUrl) {
+  if (!rawUrl) return '';
+  let url = rawUrl.trim().toLowerCase();
+
+  // Try to extract real URL from known search-engine redirect wrappers
+  try {
+    const parsed = new URL(rawUrl.startsWith('http') ? rawUrl : 'https://' + rawUrl);
+    // Google redirect: /url?q=REAL_URL
+    if (parsed.hostname.includes('google') && parsed.searchParams.has('q')) {
+      const q = parsed.searchParams.get('q');
+      if (q && q.startsWith('http')) {
+        url = q.toLowerCase();
+      }
+    }
+    // Baidu link redirect
+    if (parsed.hostname.includes('baidu.com') && parsed.searchParams.has('url')) {
+      const real = parsed.searchParams.get('url');
+      if (real && real.startsWith('http')) {
+        url = real.toLowerCase();
+      }
+    }
+    // Sogou link redirect
+    if (parsed.hostname.includes('sogou.com') && parsed.searchParams.has('url')) {
+      const real = parsed.searchParams.get('url');
+      if (real && real.startsWith('http')) {
+        try { url = decodeURIComponent(real).toLowerCase(); } catch { url = real.toLowerCase(); }
+      }
+    }
+  } catch { /* invalid URL, use raw */ }
+
+  // Normalize: strip tracking params + trailing slash + www
+  try {
+    const u = new URL(url.startsWith('http') ? url : 'https://' + url);
+    for (const key of [...u.searchParams.keys()]) {
+      if (TRACKING_PARAMS.has(key.toLowerCase())) {
+        u.searchParams.delete(key);
+      }
+    }
+    // Remove trailing slash from path (unless path is just "/")
+    if (u.pathname.length > 1 && u.pathname.endsWith('/')) {
+      u.pathname = u.pathname.slice(0, -1);
+    }
+    // Remove www. prefix
+    if (u.hostname.startsWith('www.')) {
+      u.hostname = u.hostname.slice(4);
+    }
+    // Remove fragment
+    u.hash = '';
+    // Sort query params for consistent ordering
+    u.searchParams.sort();
+    return u.toString().toLowerCase();
+  } catch {
+    return url.toLowerCase();
+  }
+}
+
+/**
+ * Normalize title for fuzzy dedup: lowercase, remove punctuation noise, truncate.
+ */
+function normalizeTitle(title) {
+  if (!title) return '';
+  return title
+    .toLowerCase()
+    .replace(/[\s\-_|·•,，。！？、；：""''（）()【】\[\]《》<>「」『』～~]+/g, ' ')  // collapse separators
+    .replace(/[^\w\u4e00-\u9fff\s]/g, '')  // remove special chars, keep CJK+alphanum+space
+    .replace(/\s+/g, ' ')                   // collapse multiple spaces
+    .trim()
+    .slice(0, 80);                          // first 80 chars for comparison
+}
 
 /**
  * Build engagement JSON from search result based on source type.
@@ -136,20 +219,49 @@ export async function monitorKeyword(keywordObj, db) {
     db.prepare("SELECT value FROM settings WHERE key = 'max_age_days'").get()?.value
   ) || 7;
 
-  // Step 1: Search across multiple engines
-  const searchResults = await searchAll(keyword, 8);
+  // Step 0: Query expansion — generate related search queries for better coverage
+  const expandedQueries = await expandQuery(keyword, scope);
+  console.log(`[Monitor] Expanded "${keyword}" → ${expandedQueries.length} queries: [${expandedQueries.join(', ')}]`);
 
-  if (!searchResults.length) {
+  // Step 1: Search across all expanded queries with round-robin
+  const perQueryResults = Math.max(3, Math.floor(8 / expandedQueries.length));
+  const allRawResults = [];
+  const seenUrls = new Set();
+  const seenTitles = new Set();
+
+  for (const q of expandedQueries) {
+    try {
+      const results = await searchAll(q, perQueryResults);
+      for (const r of results) {
+        const normUrl = normalizeUrl(r.url);
+        const normTitle = normalizeTitle(r.title);
+        // L1: dedup by normalized URL (handles different search engine redirects)
+        if (normUrl && seenUrls.has(normUrl)) continue;
+        // L1: dedup by normalized title (handles same article with different URLs)
+        if (normTitle && seenTitles.has(normTitle)) {
+          console.log(`  [Dedup] Title match: "${r.title?.slice(0, 40)}" (same as earlier result, different URL)`);
+          continue;
+        }
+        if (normUrl) seenUrls.add(normUrl);
+        if (normTitle) seenTitles.add(normTitle);
+        allRawResults.push(r);
+      }
+    } catch (error) {
+      console.error(`[Monitor] Search error for expanded query "${q}":`, error.message);
+    }
+  }
+
+  if (!allRawResults.length) {
     console.log(`[Monitor] No results for "${keyword}"`);
     return [];
   }
 
-  console.log(`[Monitor] Found ${searchResults.length} raw results for "${keyword}"`);
+  console.log(`[Monitor] Found ${allRawResults.length} raw results for "${keyword}" (from ${expandedQueries.length} queries)`);
 
   // Step 2: Freshness pre-filter — drop results older than max_age_days
   const now = Date.now();
   const ageFiltered = [];
-  for (const r of searchResults) {
+  for (const r of allRawResults) {
     if (r.pub_date) {
       const pubTime = new Date(r.pub_date).getTime();
       const ageDays = (now - pubTime) / (86400 * 1000);
@@ -160,8 +272,8 @@ export async function monitorKeyword(keywordObj, db) {
     }
     ageFiltered.push(r);
   }
-  if (ageFiltered.length < searchResults.length) {
-    console.log(`[Monitor] Age filter: ${searchResults.length - ageFiltered.length} stale results dropped, ${ageFiltered.length} remain`);
+  if (ageFiltered.length < allRawResults.length) {
+    console.log(`[Monitor] Age filter: ${allRawResults.length - ageFiltered.length} stale results dropped, ${ageFiltered.length} remain`);
   }
   if (!ageFiltered.length) {
     console.log(`[Monitor] All results too old for "${keyword}"`);
@@ -181,6 +293,9 @@ export async function monitorKeyword(keywordObj, db) {
 
   // Step 4: AI verification (strict mode — failures skip the result)
   const newHotspots = [];
+  // In-cycle dedup sets (URL + title, already deduped in Step 1, but double-check here)
+  const cycleSeenUrls = new Set();
+  const cycleSeenTitles = new Set();
   for (const result of passed) {
     try {
       const ai = await verifyContent(
@@ -191,17 +306,38 @@ export async function monitorKeyword(keywordObj, db) {
         scope
       );
 
-      // Check if URL already exists for this keyword
-      const existing = db.prepare(
-        'SELECT id FROM hotspots WHERE keyword_id = ? AND url = ?'
-      ).get(id, result.url);
+      // L2: DB dedup — check by normalized URL AND normalized title for this keyword
+      const normUrl = normalizeUrl(result.url);
+      const normTitle = normalizeTitle(result.title);
+      const existingRows = db.prepare(
+        'SELECT id, url, title FROM hotspots WHERE keyword_id = ?'
+      ).all(id);
 
-      if (existing) continue;
+      let isDuplicate = false;
+      for (const row of existingRows) {
+        if (normUrl && normalizeUrl(row.url) === normUrl) {
+          console.log(`  [Dedup] DB URL match: "${result.title?.slice(0, 40)}"`);
+          isDuplicate = true;
+          break;
+        }
+        if (normTitle && normalizeTitle(row.title) === normTitle) {
+          console.log(`  [Dedup] DB title match: "${result.title?.slice(0, 40)}"`);
+          isDuplicate = true;
+          break;
+        }
+      }
+      if (isDuplicate) continue;
 
       // Calculate 3-dimension combined score
       const combinedScore = Math.round((ai.score + ai.importance + ai.freshness) / 3);
       const sourceCategory = getSourceCategory(result.source);
       const minScore = sourceCategory === 'community' ? minScoreCommunity : minScoreEngine;
+
+      // Hard reject: low relevance — irrelevant/spam/commercial content, discard regardless of I/F
+      if (ai.score < 40) {
+        console.log(`  [AI Skip] relevance=${ai.score} < 40 (irrelevant/spam/commercial type=${ai.contentType || 'unknown'}): "${result.title?.slice(0, 40)}"`);
+        continue;
+      }
 
       // Hard reject: stale content
       if (ai.freshness < 40) {
@@ -211,20 +347,36 @@ export async function monitorKeyword(keywordObj, db) {
 
       // Only accept relevant, non-fake content with good combined score
       if (!ai.isRelevant || ai.isFake || combinedScore < minScore) {
-        console.log(`  [AI Skip] score=${ai.score} imp=${ai.importance} fresh=${ai.freshness} combined=${combinedScore} threshold=${minScore} src=${result.source}: "${result.title?.slice(0, 40)}"`);
+        console.log(`  [AI Skip] R=${ai.score} I=${ai.importance} F=${ai.freshness} combined=${combinedScore} threshold=${minScore} type=${ai.contentType || '?'} src=${result.source}: "${result.title?.slice(0, 40)}"`);
         continue;
       }
+
+      // L3: In-cycle dedup final check (prevents same content from different sources)
+      if (normUrl && cycleSeenUrls.has(normUrl)) {
+        console.log(`  [Dedup] Cycle URL already seen: "${result.title?.slice(0, 40)}"`);
+        continue;
+      }
+      if (normTitle && cycleSeenTitles.has(normTitle)) {
+        console.log(`  [Dedup] Cycle title already seen: "${result.title?.slice(0, 40)}"`);
+        continue;
+      }
+      if (normUrl) cycleSeenUrls.add(normUrl);
+      if (normTitle) cycleSeenTitles.add(normTitle);
 
       const engagement = buildEngagement(result);
       const stmt = db.prepare(`
         INSERT INTO hotspots (keyword_id, title, url, summary, source, source_name, ai_verified, relevance_score, importance, freshness, is_fake, pub_date, original_snippet, author, engagement, ai_reason)
         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 0, ?, ?, ?, ?, ?)
       `);
+      // Store contentType in ai_reason for traceability: "type:article | reason text"
+      const aiReasonWithType = ai.contentType
+        ? `[${ai.contentType}] ${ai.reason || ''}`.trim()
+        : (ai.reason || '');
       const info = stmt.run(
         id, result.title, result.url, ai.summary, result.source, result.source_name,
         ai.score, ai.importance, ai.freshness,
         result.pub_date || '', result.snippet || '', result.author || '',
-        JSON.stringify(engagement), ai.reason || ''
+        JSON.stringify(engagement), aiReasonWithType
       );
       newHotspots.push({
         id: info.lastInsertRowid,
@@ -244,7 +396,7 @@ export async function monitorKeyword(keywordObj, db) {
         engagement,
         ai_reason: ai.reason || ''
       });
-      console.log(`  [AI Pass] score=${ai.score} imp=${ai.importance} fresh=${ai.freshness} combined=${combinedScore} src=${result.source}: "${result.title?.slice(0, 40)}"`);
+      console.log(`  [AI Pass] R=${ai.score} I=${ai.importance} F=${ai.freshness} combined=${combinedScore} type=${ai.contentType || '?'} src=${result.source}: "${result.title?.slice(0, 40)}"`);
     } catch (error) {
       // Strict mode: AI failure → skip this result entirely
       console.log(`  [AI Fail] "${result.title?.slice(0, 40)}" — ${error.message} → skipped`);

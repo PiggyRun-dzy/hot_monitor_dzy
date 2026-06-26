@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import KeywordManager from './components/KeywordManager';
 import HotspotFeed from './components/HotspotFeed';
 import StatsBar from './components/StatsBar';
@@ -7,7 +7,8 @@ import SettingsModal from './components/SettingsModal';
 import SearchPanel from './components/SearchPanel';
 import LampEffect from './components/ui/LampEffect';
 import Spotlight from './components/ui/Spotlight';
-import LogPopover from './components/LogPopover';
+import NotificationBell from './components/NotificationBell';
+import NotificationToast, { useToastNotifications } from './components/NotificationToast';
 
 const TABS = [
   { key: 'feed',     label: '热点流', icon: '🔥' },
@@ -37,6 +38,14 @@ export default function App() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+
+  // Notification system
+  const { toasts, addToast, dismiss: dismissToast } = useToastNotifications();
+  const prevHotspotIds = useRef(new Set());
+  const [recentHotspots, setRecentHotspots] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const isInitialLoad = useRef(true);   // suppress toasts on first load
+  const queryChanged = useRef(false);   // suppress toasts on page/filter change
 
   const api = useCallback((path, opts) =>
     fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts }).then(r => r.json()), []);
@@ -70,14 +79,53 @@ export default function App() {
       const [kws, hs, st] = await Promise.all([
         api('/api/keywords'), api(url), api('/api/stats')
       ]);
-      setKeywords(kws || []); setHotspots(hs?.data || []);
+      setKeywords(kws || []);
       setTotalPages(hs?.totalPages || 1);
       setTotalCount(hs?.total || 0);
       setStats(st || {});
+
+      // Detect new hotspots for notification
+      const newData = hs?.data || [];
+      if (newData.length > 0) {
+        const currentIds = new Set(newData.map(h => h.id));
+        const newHotspots = newData.filter(h => !prevHotspotIds.current.has(h.id));
+
+        if (newHotspots.length > 0 && prevHotspotIds.current.size > 0 && !isInitialLoad.current && !queryChanged.current) {
+          // Show toast for each new hotspot (max 3)
+          for (const h of newHotspots.slice(0, 3)) {
+            addToast(h.title, h.source_name || h.source || '未知来源');
+          }
+          // Update notification bell list
+          setRecentHotspots(prev => {
+            const merged = [...newHotspots, ...prev];
+            const seen = new Set();
+            return merged.filter(h => { const k = h.id; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 20);
+          });
+        }
+        prevHotspotIds.current = currentIds;
+      }
+
+      // Fetch unread count for bell badge
+      try {
+        const unreadRes = await api('/api/hotspots?status=unread&limit=20&sort=detected_at&order=desc');
+        setUnreadCount(unreadRes?.total || 0);
+      } catch { /* ignore */ }
+
+      setHotspots(newData);
     } catch { /* ignore */ }
-  }, [api, buildHotspotUrl]);
+    // Mark initial load complete; query changed flag resets after one suppressed cycle
+    isInitialLoad.current = false;
+    queryChanged.current = false;
+  }, [api, buildHotspotUrl, addToast]);
 
   useEffect(() => { loadAll(); const t = setInterval(loadAll, 15000); return () => clearInterval(t); }, [loadAll]);
+
+  // Reset ID tracking when query changes (page/sort/filter switch — suppress toasts)
+  useEffect(() => {
+    prevHotspotIds.current = new Set();
+    isInitialLoad.current = true;
+    queryChanged.current = true;
+  }, [sortField, sortOrder, filters, page]);
 
   const addKeyword = async (kw, scope) => {
     const r = await api('/api/keywords', { method: 'POST', body: JSON.stringify({ keyword: kw, scope }) });
@@ -107,6 +155,8 @@ export default function App() {
   const handleFilterChange = (next) => { setFilters(next); setPage(1); };
   const handleSortChange = (field, order) => { setSortField(field); setSortOrder(order); setPage(1); };
 
+  const clearNotifications = () => { setRecentHotspots([]); setUnreadCount(0); };
+
   const newCount = stats.recent24h || 0;
 
   return (
@@ -130,7 +180,7 @@ export default function App() {
               )}
             </div>
             <div className="flex items-center gap-2">
-              <LogPopover api={api} />
+              <NotificationBell unreadCount={unreadCount} recentHotspots={recentHotspots} onClearAll={clearNotifications} />
               <button onClick={scanAll} disabled={scanning}
                 className={`neo-btn text-xs ${scanning ? 'neo-btn-ghost opacity-50' : 'neo-btn-primary'}`}>
                 {scanning ? '扫描中…' : '手动扫描'}
@@ -195,6 +245,9 @@ export default function App() {
 
       {showAdd && <AddKeywordModal onClose={() => setShowAdd(false)} onAdd={addKeyword} />}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+
+      {/* Toast notifications */}
+      <NotificationToast toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

@@ -6,6 +6,9 @@ export default function SettingsModal({ onClose }) {
     smtp_host: '', smtp_port: '587', smtp_user: '', smtp_pass: '', notify_email: ''
   });
   const [saving, setSaving] = useState(false);
+  const [evaluating, setEvaluating] = useState(false);
+  const [evalReport, setEvalReport] = useState(null);
+  const [evalSampleSize, setEvalSampleSize] = useState('20');
 
   useEffect(() => { fetch('/api/settings').then(r => r.json()).then(d => { if (d && Object.keys(d).length) setSettings(p => ({ ...p, ...d })); }).catch(() => {}); }, []);
 
@@ -15,6 +18,23 @@ export default function SettingsModal({ onClose }) {
     setSaving(false);
   };
   const upd = (k, v) => setSettings(p => ({ ...p, [k]: v }));
+
+  const runEvaluation = async () => {
+    setEvaluating(true);
+    setEvalReport(null);
+    try {
+      const res = await fetch('/api/ai/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sampleSize: parseInt(evalSampleSize) || 20 })
+      });
+      const data = await res.json();
+      setEvalReport(data);
+    } catch (e) {
+      setEvalReport({ error: '评估失败: ' + e.message });
+    }
+    setEvaluating(false);
+  };
 
   return (
     <div className="modal-overlay animate-fade-in" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
@@ -69,6 +89,66 @@ export default function SettingsModal({ onClose }) {
                 className="w-full h-1.5 bg-white/[0.06] rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-primary [&::-webkit-slider-thumb]:cursor-pointer" />
               <div className="flex justify-between text-[10px] text-zinc-600 mt-0.5"><span>3 天（严格）</span><span>推荐 7 天</span><span>30 天（宽松）</span></div>
             </div>
+          </section>
+
+          <section>
+            <h3 className="text-xs font-mono text-accent-primary mb-3 uppercase tracking-wider">AI 审核准确度评估</h3>
+            <p className="text-[11px] text-zinc-500 mb-3">让 AI 回顾历史审核记录并重新评估，发现判断偏差，辅助优化审核策略。</p>
+
+            <div className="flex items-center gap-3 mb-3">
+              <label className="text-xs text-zinc-400">抽样数量</label>
+              <select value={evalSampleSize} onChange={e => setEvalSampleSize(e.target.value)}
+                className="neo-input w-24 font-mono text-sm">
+                <option value="10">10 条</option>
+                <option value="20">20 条</option>
+                <option value="30">30 条</option>
+                <option value="50">50 条</option>
+              </select>
+              <button onClick={runEvaluation} disabled={evaluating}
+                className="neo-btn neo-btn-primary text-xs px-4 py-1.5 disabled:opacity-50">
+                {evaluating ? '评估中…' : '开始评估'}
+              </button>
+            </div>
+
+            {evalReport && !evalReport.error && (
+              <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg p-3 space-y-2">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="text-xs text-zinc-400">样本数: <strong className="text-zinc-200">{evalReport.sampleSize}</strong></span>
+                  {evalReport.summary && (
+                    <>
+                      <span className="text-xs text-emerald-400">一致: <strong>{evalReport.summary.consistent}</strong></span>
+                      <span className="text-xs text-amber-400">偏差: <strong>{evalReport.summary.discrepant}</strong></span>
+                      <span className="text-xs text-rose-400">高估: <strong>{evalReport.summary.overrated}</strong></span>
+                      <span className="text-xs text-blue-400">低估: <strong>{evalReport.summary.underrated}</strong></span>
+                      <span className="text-xs text-accent-primary font-mono">准确率: <strong>{evalReport.summary.accuracyPercentage}%</strong></span>
+                    </>
+                  )}
+                </div>
+                {evalReport.summary?.keyFindings && (
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    <span className="text-zinc-500">主要发现：</span>{evalReport.summary.keyFindings}
+                  </p>
+                )}
+                {evalReport.reviews && evalReport.reviews.filter(r => r.verdict !== 'consistent').length > 0 && (
+                  <details className="mt-2">
+                    <summary className="text-xs text-zinc-500 cursor-pointer hover:text-zinc-300">查看偏差详情 ({evalReport.reviews.filter(r => r.verdict !== 'consistent').length} 条)</summary>
+                    <div className="mt-2 space-y-1.5 max-h-[200px] overflow-y-auto custom-scroll">
+                      {evalReport.reviews.filter(r => r.verdict !== 'consistent').map(r => (
+                        <div key={r.index} className="text-[10px] text-zinc-500 bg-white/[0.02] rounded p-1.5 leading-relaxed">
+                          <span className={r.verdict === 'overrated' ? 'text-rose-400' : 'text-blue-400'}>
+                            [{r.verdict === 'overrated' ? '高估' : '低估'}]
+                          </span>
+                          {' '}#{r.index}: {r.discrepancy}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </div>
+            )}
+            {evalReport?.error && (
+              <p className="text-xs text-rose-400">{evalReport.error}</p>
+            )}
           </section>
 
           <section>

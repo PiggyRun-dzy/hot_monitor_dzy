@@ -1,6 +1,6 @@
 import dbModule from '../db.js';
 const { getDb } = dbModule;
-import { generateBatchSummary } from '../ai.js';
+import { generateBatchSummary, evaluateAIPerformance } from '../ai.js';
 
 // Source classification
 const ENGINE_SOURCES = ['bing', 'google', 'ddg', 'sogou', 'baidu'];
@@ -241,5 +241,39 @@ export default function hotspotRoutes(app) {
       'SELECT * FROM monitor_logs ORDER BY created_at DESC LIMIT 20'
     ).all();
     res.json(logs);
+  });
+
+  // AI Self-Evaluation: trigger evaluation for historical hotspots
+  app.post('/api/ai/evaluate', async (req, res) => {
+    const db = getDb();
+    const { sampleSize = 20, keywordId } = req.body || {};
+
+    try {
+      const report = await evaluateAIPerformance(db, {
+        sampleSize: Math.min(Number(sampleSize), 50),
+        keywordId: keywordId ? Number(keywordId) : null
+      });
+
+      // Save evaluation result to monitor_logs
+      if (!report.error) {
+        const summary = report.summary || {};
+        const msg = `AI评估完成: 抽样${report.sampleSize}条, 一致${summary.consistent}条, 偏差${summary.discrepant}条, 准确率${summary.accuracyPercentage}%`;
+        db.prepare("INSERT INTO monitor_logs (type, message) VALUES (?, ?)").run('ai_evaluate', msg);
+      }
+
+      res.json(report);
+    } catch (error) {
+      console.error('[AI Eval] API error:', error.message);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Get latest AI evaluation report
+  app.get('/api/ai/evaluate/latest', (req, res) => {
+    const db = getDb();
+    const log = db.prepare(
+      "SELECT * FROM monitor_logs WHERE type = 'ai_evaluate' ORDER BY created_at DESC LIMIT 1"
+    ).get();
+    res.json(log || null);
   });
 }

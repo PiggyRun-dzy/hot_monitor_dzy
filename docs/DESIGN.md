@@ -1,6 +1,6 @@
 # Hot Monitor — 方案设计文档
 
-> **版本**: v1.4 | **日期**: 2026-06-26
+> **版本**: v1.5 | **日期**: 2026-06-27
 
 ---
 
@@ -25,13 +25,16 @@
 Browser (:5173)  ──API Proxy──▶  Express (:3456)
                                    ├─ Routes (keywords/hotspots/settings)
                                    ├─ Monitor Engine
-                                   │   ├─ Search (12 sources, round-robin)
+                                   │   ├─ AI Query Expansion (keyword → 3-5 search terms)
+                                   │   ├─ Search (12 sources × expanded queries, round-robin)
                                    │   │   ├─ Rich snippet extraction (description/story_text etc.)
                                    │   │   └─ Engagement data capture (points/play/stars etc.)
+                                   │   ├─ URL/Title Normalize & Dedup (3-layer)
                                    │   ├─ Freshness Filter (pub_date > max_age_days)
                                    │   ├─ Engagement Filter (source-specific)
-                                   │   ├─ AI Verify (3D: R+I+F + reason, OpenRouter)
-                                   │   └─ Notifier (Email)
+                                   │   ├─ AI Verify (contentType + R+I+F + reason, OpenRouter)
+                                   │   ├─ AI Self-Evaluate (historical re-evaluation)
+                                   │   └─ Notifier (Email + Toast)
                                    ├─ Scheduler (node-cron)
                                    └─ SQLite (sql.js WASM)
 ```
@@ -39,17 +42,23 @@ Browser (:5173)  ──API Proxy──▶  Express (:3456)
 ### 数据流
 
 ```
-搜索(12源轮询) → 提取丰富片段+互动数据
-                       ↓
-               时效预过滤(pub_date>7天→丢弃)
-                       ↓
-               互动量预过滤(源级阈值)
-                       ↓
-               AI 四维验证(Relevance+Importance+Freshness+Reason)
-                       ↓  F<40→丢弃; 综合分≥阈值
-               SQLite INSERT (含engagement JSON+pub_date+author+original_snippet+ai_reason)
-                       ↓
-               前端轮询15s + 邮件通知
+AI查询扩展(关键词→3-5个搜索词)
+           ↓
+搜索(12源轮询 × 扩展词)
+           ↓
+URL/标题归一化去重 → 合并结果
+           ↓
+提取丰富片段+互动数据
+           ↓
+时效预过滤(pub_date>7天→丢弃)
+           ↓
+互动量预过滤(源级阈值)
+           ↓
+AI 多维验证(内容分类contentType + R+I+F + Reason)
+           ↓  R<40→丢弃; F<40→丢弃; 综合分≥阈值
+SQLite INSERT (含engagement JSON+pub_date+author+original_snippet+ai_reason[contentType])
+           ↓
+前端Toast实时通知 + 铃铛列表 + 邮件通知
 ```
 
 ---
@@ -126,6 +135,8 @@ Browser (:5173)  ──API Proxy──▶  Express (:3456)
 | POST | `/api/scan` | 触发全量扫描 |
 | GET | `/api/stats` | `{totalKeywords,activeKeywords,totalHotspots,recent24h,verified,lastScan}` |
 | GET | `/api/logs` | 最近 20 条 |
+| POST | `/api/ai/evaluate` | 触发 AI 自评估 `{sampleSize, keywordId}` |
+| GET | `/api/ai/evaluate/latest` | 获取最近一次评估报告 |
 | GET/PUT | `/api/settings` | 配置读写 |
 | GET | `/api/debug/search` | 调试：测试各源原始返回（`?keyword=`） |
 
@@ -155,7 +166,7 @@ Browser (:5173)  ──API Proxy──▶  Express (:3456)
 ## 5. UI 组件
 
 ```
-App.jsx                      三 Tab 主布局 + Header + 扫描轮询 + 排序/筛选/分页状态
+App.jsx                      三 Tab 主布局 + Header + Toast通知 + 扫描轮询 + 排序/筛选/分页状态
 ├── StatsBar.jsx             4 统计卡片（ShootingStar + GlowingEffect）
 ├── HotspotFeed.jsx          热点信号流 + 展开/折叠全部 AI 分析
 │   ├── FilterBar.jsx        排序下拉(6种) + 时间/来源/关键词/评分筛选 + 更多筛选(展开)
@@ -164,9 +175,10 @@ App.jsx                      三 Tab 主布局 + Header + 扫描轮询 + 排序/
 │                             + AI理由(折叠) + 标题独立链接(↗) + 卡片hover动效
 ├── KeywordManager.jsx       滑块开关 + 编辑/删除图标 + 编辑弹窗
 ├── SearchPanel.jsx          全文搜索 + FilterBar + 分页 + 展开/折叠全部
-├── LogPopover.jsx           Header 日志按钮 → 弹窗
+├── NotificationBell.jsx     Header 铃铛图标 + 未读badge + 新热点下拉列表
+├── NotificationToast.jsx    + useToastNotifications hook，右上角滑动弹窗
 ├── AddKeywordModal.jsx      玻璃弹窗
-├── SettingsModal.jsx        扫描间隔 + 引擎/社区阈值滑块 + 最大天数滑块 + SMTP
+├── SettingsModal.jsx        扫描间隔 + 引擎/社区阈值滑块 + 最大天数滑块 + SMTP + AI评估
 └── ui/
     ├── Spotlight.jsx        全屏光束
     ├── ShootingStar.jsx     随机流星
@@ -178,19 +190,16 @@ App.jsx                      三 Tab 主布局 + Header + 扫描轮询 + 排序/
 
 ## 6. 核心模块
 
-### ai.js — DeepSeek V4 Pro 四维验证（v1.4 扩展）
+### ai.js — DeepSeek V4 Pro 多维验证 + 查询扩展 + 自评估（v1.5）
 
 ```javascript
-// 请求
-POST https://openrouter.ai/api/v1/chat/completions
-{
-  model: 'deepseek/deepseek-v4-pro',
-  response_format: { type: 'json_object' },
-  max_tokens: 1000
-}
+// Shared API caller
+callAI(prompt, { maxTokens, temperature, forceJSON })
 
-// AI prompt 要求返回 7 个字段
-{ isRelevant, isFake, score(0-100), importance(0-100), freshness(0-100), summary(≤120chars), reason(20-40字) }
+// 1. 增强版内容验证（返回 8 字段）
+verifyContent(title, snippet, url, keyword, scope)
+  → prompt: 三步审核（分类→评分→判定）+ 7种内容类型 + 5类反例
+  → returns: { isRelevant, isFake, score, importance, freshness, summary, reason, contentType }
 
 // 字段兼容 DeepSeek 命名差异
 const isRelevant = result.isRelevant ?? result.relevant ?? true;
@@ -200,11 +209,23 @@ const importance = Number(result.importance ?? 50);
 const freshness  = Number(result.freshness ?? 50);
 const summary    = String(result.summary).slice(0, 120);
 const reason     = String(result.reason).slice(0, 80);
+const contentType = result.contentType ?? '';
 
 // 硬拒绝
+if (score < 40) continue;       // + 商业/垃圾内容过滤
 if (freshness < 40) continue;
 const combined = Math.round((score + importance + freshness) / 3);
 // 入库: isRelevant && !isFake && combined >= minScore(source)
+
+// 2. 查询扩展
+expandQuery(keyword, scope)
+  → prompt: 扩展为近义词/变体/换序/中英文
+  → returns: [keyword, variant1, variant2, variant3] (max 5)
+
+// 3. AI 自评估
+evaluateAIPerformance(db, { sampleSize, keywordId })
+  → 从DB抽样历史热点 → AI逐条重评 → 对比原始评分
+  → returns: { reviews[], summary: { consistent, discrepant, overrated, underrated, accuracyPercentage, keyFindings } }
 ```
 
 ### web-scraper.js — 12 源 round-robin 搜索（v1.4 扩展片段提取）
@@ -246,17 +267,31 @@ searchAll(keyword, maxResults=8)
 | 微博热搜 | hotness ≥ 100000 |
 | 搜索引擎 | 无预过滤（交 AI 判断） |
 
-### monitor.js — 监控引擎（v1.4 扩展）
+### monitor.js — 监控引擎（v1.5）
 
 ```javascript
 monitorKeyword(keywordObj, db)
-  ① searchAll(keyword, 8)                          // 12 源轮询，丰富片段
+  ⓪ expandQuery(keyword, scope)                     // AI 查询扩展 → [kw, v1, v2, v3]
+  ① searchAll(query, n) for each expanded query     // 12 源轮询 × 扩展词
+     → normalizeUrl() + normalizeTitle() 去重合并    // 提取重定向URL + 标题归一化
   ② 时效预过滤 (pub_date > max_age_days)           // 省 AI token
   ③ 互动量预过滤 (源级阈值)                         // 质量门槛
-  ④ for each → AI verifyContent()                  // R+I+F+reason 四维
-  ⑤ F<40 → 跳过 | 综合分<阈值 → 跳过                // 硬拒绝
-  ⑥ buildEngagement(result)                         // 按源提取互动数据 JSON
-  ⑦ 去重 URL → INSERT (含pub_date/original_snippet/author/engagement/ai_reason)
+  ④ for each → AI verifyContent()                  // contentType + R+I+F+reason
+  ⑤ R<40 → 跳过 | F<40 → 跳过                       // 双重硬拒绝
+  ⑥ DB归一化去重 (URL + 标题)                        // 跨周期重复检测
+  ⑦ 同周期最终去重检查                                // 三重防护
+  ⑧ buildEngagement(result)                         // 按源提取互动数据 JSON
+  ⑨ INSERT (含pub_date/original_snippet/author/engagement/ai_reason[contentType])
+
+// URL 规范化
+normalizeUrl(url):
+  提取 Google/Baidu/Sogou 重定向 → 真实URL
+  剥离 20+ 追踪参数 (utm_*, fbclid, gclid, wd, eqid...)
+  去尾部斜杠/去www/去hash/排序query params
+
+// 标题归一化
+normalizeTitle(title):
+  小写 → 标点→空格 → 去特殊字符 → 截断80字
 ```
 
 ### HotspotCard.jsx — 卡片信息层级（v1.4）
@@ -322,3 +357,5 @@ npm run dev           # 一键启动 → :5173 / :3456
 | 18 | 筛选/排序缺失 | 仅支持通知状态过滤 | 6 种排序 + 10 种筛选 + 服务端分页 |
 | 19 | cloneDeep 重复声明 | 旧 replace 残留 | 文件清理 |
 | 20 | buildEngagement 重复声明 | `/**` 匹配多处 | 写全文件重写 |
+| 21 | 热点大量重复（同文章多源URL不同） | 各搜索引擎返回不同格式URL（Bing直链/Google重定向/百度加密），精确字符串去重失效 | URL规范化（提取重定向+剥离追踪参数）+ 标题归一化去重，三层防护 |
+| 22 | 日志通知无价值 | 日志只显示"扫描完成：N条"，不告知具体内容，弹窗查看不符合即时通知需求 | Toast 实时弹出 + 铃铛下拉列表，新热点到达即显示标题+来源 |
