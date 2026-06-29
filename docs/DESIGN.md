@@ -1,6 +1,6 @@
 # Hot Monitor — 方案设计文档
 
-> **版本**: v1.5 | **日期**: 2026-06-27
+> **版本**: v1.6 | **日期**: 2026-06-29
 
 ---
 
@@ -16,6 +16,7 @@
 | 搜索 | Cheerio + Fetch | - | 12 源爬虫/API |
 | 调度 | node-cron | 3.0.3 | Cron 表达式 |
 | 启动 | start.js (child_process.spawn) | - | 单窗口，自动检测 node 路径 |
+| **Agent Skills** | **Node.js ESM + Cheerio + Fetch** | **≥18** | **自包含脚本，零服务端/零DB，仅 2 个 npm 依赖** |
 
 ---
 
@@ -318,6 +319,8 @@ normalizeTitle(title):
 
 ## 7. 部署
 
+### Web 应用
+
 ```bash
 npm run setup         # 安装前后端依赖
 cp .env.example .env  # 配置 OPENROUTER_API_KEY
@@ -331,9 +334,105 @@ npm run dev           # 一键启动 → :5173 / :3456
 | `PORT` | - | `3456` |
 | `SCAN_INTERVAL_MINUTES` | - | `30` |
 
+### Agent Skills（独立使用，无需启动服务）
+
+```bash
+cd .codebuddy/skills/hot-monitor
+npm install            # 仅 2 个依赖：cheerio + dotenv
+cp .env.example .env   # 配置 OPENROUTER_API_KEY
+node scripts/hot-monitor.js -k "GPT-5" --freshness
+```
+
 ---
 
-## 8. 填坑记录
+## 8. Agent Skills 架构（v1.6）
+
+### 定位
+
+与 Server 子系统**完全独立**的自包含工具包，无需启动服务或数据库，AI Agent 直接调用脚本即可获得热点搜索结果。
+
+### 目录结构
+
+```
+.codebuddy/skills/hot-monitor/
+├── SKILL.md                    # Agent 触发指令（何时用/如何调参/结果展示）
+├── package.json                # 仅依赖 cheerio + dotenv
+├── .env.example
+├── scripts/
+│   ├── hot-monitor.js          # 主入口：扩展→搜索→过滤→AI验证→JSON输出
+│   ├── search.js               # 12 源爬虫（纯函数）
+│   └── ai.js                   # AI 验证 + 查询扩展（API Key 显式注入）
+└── references/
+    └── search-sources.md       # 搜索源详细文档
+```
+
+### 与 Server 子系统的差异
+
+| 维度 | Server 子系统 | Agent Skills |
+|------|-------------|-------------|
+| 运行方式 | 常驻 Express 服务 | 按需执行脚本 |
+| 数据库 | sql.js SQLite 持久化 | **不持久化**，输出 JSON |
+| 调度 | node-cron 定时扫描 | Agent 按需调用 |
+| 通知 | Toast + 铃铛 + 邮件 | 结果直接返回给 Agent |
+| 用户界面 | React Web UI | Agent 自行格式化展示 |
+| 依赖数 | 7 个 npm 包 | **2 个** npm 包 |
+| 分发方式 | 完整项目克隆 | 目录自包含，开源可独立使用 |
+
+### 管线流程
+
+```
+Agent 调用 → searchHotTopics(keyword, options)
+  ↓
+① expandQuery(keyword)           // AI 查询扩展（3-5 个变体）
+  ↓
+② searchAll(q) × expandedQueries // 12 源并行搜索，轮询去重
+  ↓
+③ normalizeUrl/normalizeTitle    // URL/标题归一化去重
+  ↓
+④ 时效预过滤                     // pub_date > max_age_days → 丢弃
+  ↓
+⑤ 互动量预过滤                   // 社区源阈值检查
+  ↓
+⑥ verifyContent() × n            // AI 多维验证 (R+I+F+contentType+reason)
+  ↓  R<40 → 跳过 | F<40 → 跳过 | combined < 阈值 → 跳过
+⑦ 按 combinedScore 降序排列
+  ↓
+⑧ 输出 JSON 到 stdout / 返回对象
+```
+
+### 模块职责
+
+| 模块 | 来源 | 修改 |
+|------|------|------|
+| `scripts/search.js` | `server/search/web-scraper.js` | 纯函数，**零改动**（直接复用） |
+| `scripts/ai.js` | `server/ai.js` | API Key 从隐式 `dotenv` 改为参数显式注入 |
+| `scripts/hot-monitor.js` | `server/monitor.js` | 移除 DB 操作/通知/调度，新增 CLI 解析 + JSON 输出 |
+
+### 调用方式
+
+```bash
+# CLI 模式（Agent 直接执行）
+node scripts/hot-monitor.js -k "GPT-5" --freshness --limit 10
+
+# 编程模式（Agent import）
+import { searchHotTopics } from './scripts/hot-monitor.js';
+const result = await searchHotTopics('GPT-5', { apiKey: 'sk-xxx', freshness: true });
+```
+
+### SKILL.md 触发规则
+
+Agent 加载 Skill 后，按以下规则从用户自然语言提取参数：
+
+| 用户表述 | 提取参数 |
+|----------|---------|
+| "今天/最新/最近/本周" | `--freshness` |
+| "可靠/权威/高质量" | `--min-score 80` |
+| "详细/更多/全部" | `--limit 20` |
+| 人名/产品名 + 话题 | 合并为 `keyword`（如 "程序员鱼皮 AI"） |
+
+---
+
+## 9. 填坑记录
 
 | # | 问题 | 根因 | 解决 |
 |---|------|------|------|

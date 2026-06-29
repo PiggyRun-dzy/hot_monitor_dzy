@@ -9,6 +9,7 @@
   <img src="https://img.shields.io/badge/Express-4-000000?logo=express" alt="Express">
   <img src="https://img.shields.io/badge/SQLite-sql.js-blue" alt="SQLite">
   <img src="https://img.shields.io/badge/AI-DeepSeek_V4_Pro-7C3AED" alt="DeepSeek">
+  <img src="https://img.shields.io/badge/Agent_Skill-v1.6-00FF88" alt="Agent Skill">
 </p>
 
 ---
@@ -28,10 +29,13 @@
 - **✨ Aceternity 动效** — 光束聚光灯、流星效果、玻璃拟态卡片
 - **📊 统计卡片** — 关键词/热点/24h/AI验证，透明玻璃风格
 - **📧 邮件通知** — 热点发现自动邮件（待配置）
+- **🤖 Agent Skills** — 自包含工具包，零服务/零 DB，AI Agent 直接调用搜索热点，开源可独立使用
 
 ---
 
 ## 🚀 快速开始
+
+### 方式一：Web 应用（完整版）
 
 ### 1. 环境要求
 
@@ -72,6 +76,24 @@ npm run dev
 > ```
 
 打开 **http://localhost:5173** 即可看到赛博雷达监测站界面。
+
+### 方式二：Agent Skills（独立工具包）
+
+无需启动服务，Agent 或命令行直接调用：
+
+```bash
+cd .codebuddy/skills/hot-monitor
+npm install                             # 仅 2 个依赖
+cp .env.example .env                    # 配置 OPENROUTER_API_KEY
+
+# CLI 一键搜索
+node scripts/hot-monitor.js -k "程序员鱼皮 AI" --freshness
+
+# 编程调用
+# import { searchHotTopics } from './scripts/hot-monitor.js';
+```
+
+> 💡 Skills 目录自包含，不依赖 server/ 或 client/，可直接开源分发。
 
 ---
 
@@ -192,6 +214,11 @@ hot-monitor/
 │   └── routes/             # API 路由
 ├── client/                 # 前端 React + Vite
 │   └── src/components/     # 9 个 UI 组件（含通知系统）
+├── .codebuddy/skills/      # Agent Skills（自包含工具包）
+│   └── hot-monitor/
+│       ├── SKILL.md        # Agent 触发指令
+│       ├── scripts/        # 搜索+AI验证（零服务/零DB）
+│       └── references/     # 文档
 ├── start.js                # 一键启动脚本
 ├── docs/
 │   ├── DESIGN.md           # 方案设计文档

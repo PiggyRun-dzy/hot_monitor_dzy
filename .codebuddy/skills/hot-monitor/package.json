@@ -1,0 +1,29 @@
+{
+  "name": "hot-monitor-skill",
+  "version": "1.0.0",
+  "description": "AI Agent Skill: 多源热点搜索 + AI 多维验证，12 大免费数据源实时搜索，DeepSeek AI 智能验证内容真实性与相关性",
+  "type": "module",
+  "main": "scripts/hot-monitor.js",
+  "bin": {
+    "hot-monitor": "scripts/hot-monitor.js"
+  },
+  "scripts": {
+    "search": "node scripts/hot-monitor.js"
+  },
+  "keywords": [
+    "hot-monitor",
+    "hotspot",
+    "search",
+    "AI-verification",
+    "agent-skill",
+    "web-scraper"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "dotenv": "^16.6.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
